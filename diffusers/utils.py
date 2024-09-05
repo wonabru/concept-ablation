@@ -43,7 +43,8 @@ def retrieve(class_prompt, class_images_dir, num_class_images, save_images=False
     os.makedirs(f"{class_images_dir}/images", exist_ok=True)
     if len(list(Path(f"{class_images_dir}/images").iterdir())) >= num_class_images:
         return
-
+    print("class_prompt", class_prompt)
+    print(class_prompt, class_images_dir, num_class_images, save_images)
     while True:
         class_images = client.query(text=class_prompt)
         if len(class_images) >= factor * num_class_images or num_images > 1e4:

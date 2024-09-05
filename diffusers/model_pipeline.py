@@ -3,7 +3,6 @@ from typing import Callable, Optional
 import torch
 from accelerate.logging import get_logger
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
-from diffusers.models.cross_attention import CrossAttention
 from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion.safety_checker import (
     StableDiffusionSafetyChecker,
@@ -68,7 +67,7 @@ def set_use_memory_efficient_attention_xformers(
 class CustomDiffusionAttnProcessor:
     def __call__(
         self,
-        attn: CrossAttention,
+        attn,
         hidden_states,
         encoder_hidden_states=None,
         attention_mask=None,
@@ -114,7 +113,7 @@ class CustomDiffusionXFormersAttnProcessor:
     def __init__(self, attention_op: Optional[Callable] = None):
         self.attention_op = attention_op
 
-    def __call__(self, attn: CrossAttention, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None):
         batch_size, sequence_length, _ = hidden_states.shape
 
         attention_mask = attn.prepare_attention_mask(

@@ -43,7 +43,7 @@ from diffusers import (
     DPMSolverMultistepScheduler,
     UNet2DConditionModel,
 )
-from diffusers.models.cross_attention import CrossAttention
+from diffusers.models.attention import Attention as CrossAttention
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
@@ -560,7 +560,7 @@ def main(args):
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
+        # logging_dir=logging_dir,
         project_config=accelerator_project_config,
     )
 
@@ -713,7 +713,7 @@ def main(args):
                 with open(concept["class_prompt"]) as f:
                     class_prompt_collection = [x.strip() for x in f.readlines()]
 
-            num_new_images = args.num_class_images
+            num_new_images = 10  # args.num_class_images
             logger.info(f"Number of class images to sample: {num_new_images}.")
 
             sample_dataset = PromptDataset(class_prompt_collection, num_new_images)
