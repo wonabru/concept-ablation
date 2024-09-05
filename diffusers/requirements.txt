@@ -13,3 +13,4 @@ SentencePiece
 imageio-ffmpeg
 opencv-python
 datasets
+transformer-engine
