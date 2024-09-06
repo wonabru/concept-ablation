@@ -1,7 +1,7 @@
 ## Getting Started
 
 ```
-for training 2 x 80 GB VRAM
+for training 80 GB VRAM H100
 
 cd concept-ablation
 mkdir data
@@ -10,8 +10,9 @@ mkdir assets/pretrained_models
 cd assets/pretrained_models
 wget https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_imagenet_mixup.torchscript.pt       # SSCD (required when ablating memorized images)
 cd ../../diffusers
-pip install torch==2.2.2+cu121 torchvision==0.17.2+cu121 -f https://download.pytorch.org/whl/torch_stable.html
+pip install torch==2.4.0+cu121 torchvision -f https://download.pytorch.org/whl/torch_stable.html
 pip install numpy==1.26.4
+pip install bitsandbytes
 pip install --ignore-installed -r requirements.txt
 accelerate config
 ```

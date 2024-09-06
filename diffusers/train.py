@@ -34,7 +34,7 @@ from utils import (
     getanchorprompts,
     retrieve,
 )
-
+import bitsandbytes as bnb
 import diffusers
 from diffusers import (
     AutoencoderKL,
@@ -42,6 +42,7 @@ from diffusers import (
     DiffusionPipeline,
     DPMSolverMultistepScheduler,
     UNet2DConditionModel,
+    AutoencoderKLCogVideoX,
 )
 from diffusers.models.attention import Attention as CrossAttention
 from diffusers.optimization import get_scheduler
@@ -84,7 +85,7 @@ def create_custom_diffusion(unet, parameter_group):
                 change_attn(layer)
 
     change_attn(unet)
-    unet.set_attn_processor(CustomDiffusionAttnProcessor())
+    # unet.set_attn_processor(CustomDiffusionAttnProcessor())
     return unet
 
 
@@ -130,6 +131,7 @@ def import_model_class_from_model_name_or_path(
     )
     model_class = text_encoder_config.architectures[0]
 
+    
     if model_class == "CLIPTextModel":
         from transformers import CLIPTextModel
 
@@ -141,7 +143,9 @@ def import_model_class_from_model_name_or_path(
 
         return RobertaSeriesModelWithTransformation
     else:
-        raise ValueError(f"{model_class} is not supported.")
+        from transformers import T5EncoderModel
+        return T5EncoderModel
+        # raise ValueError(f"{model_class} is not supported.")
 
 
 def freeze_params(params):
@@ -713,7 +717,7 @@ def main(args):
                 with open(concept["class_prompt"]) as f:
                     class_prompt_collection = [x.strip() for x in f.readlines()]
 
-            num_new_images = 10  # args.num_class_images
+            num_new_images = 1  # args.num_class_images
             logger.info(f"Number of class images to sample: {num_new_images}.")
 
             sample_dataset = PromptDataset(class_prompt_collection, num_new_images)
@@ -746,15 +750,17 @@ def main(args):
                     images = pipeline(
                         example["prompt"],
                         num_inference_steps=25,
-                        guidance_scale=6.0,
+                        num_frames=8,
+                        guidance_scale=6,
                         eta=1.0,
-                    ).images
-
+                    ).frames[0][:1]
+                    logger.warning(len(images))
+                    logger.warning(example)
                     for i, image in enumerate(images):
                         hash_image = hashlib.sha1(image.tobytes()).hexdigest()
                         image_filename = (
-                            class_images_dir
-                            / f"images/{example['index'][i]}-{hash_image}.jpg"
+                            class_images_dir /
+                            f"images/{example['index'][i]}-{hash_image}.jpg"
                         )
                         image.save(image_filename)
                         f2.write(str(image_filename) + "\n")
@@ -825,17 +831,17 @@ def main(args):
         subfolder="text_encoder",
         revision=args.revision,
     )
-    vae = AutoencoderKL.from_pretrained(
+    vae = AutoencoderKLCogVideoX.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
     )
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
-    )
+    # unet = UNet2DConditionModel.from_pretrained(
+        # args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+    # )
 
-    vae.requires_grad_(False)
+    # vae.requires_grad_(False)
     if args.parameter_group != "embedding":
         text_encoder.requires_grad_(False)
-    unet = create_custom_diffusion(unet, args.parameter_group)
+    vae = create_custom_diffusion(vae, args.parameter_group)
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -844,10 +850,10 @@ def main(args):
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
-
+    
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     if accelerator.mixed_precision != "fp16":
-        unet.to(accelerator.device, dtype=weight_dtype)
+        # unet.to(accelerator.device, dtype=weight_dtype)
         text_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
@@ -860,14 +866,14 @@ def main(args):
                 logger.warn(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
-            unet.enable_xformers_memory_efficient_attention()
+            vae.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError(
                 "xformers is not available. Make sure it is installed correctly"
             )
 
     if args.gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
+        vae.enable_gradient_checkpointing()
         if args.parameter_group == "embedding":
             text_encoder.gradient_checkpointing_enable()
     # Enable TF32 for faster training on Ampere GPUs,
@@ -906,7 +912,7 @@ def main(args):
             args.concept_type != "memorization"
         ), "embedding finetuning is not supported for memorization"
 
-        for concept in args.concept_list:
+        for concept in args.concepts_list:
             # Convert the caption_target to ids
             token_ids = tokenizer.encode(
                 [concept["caption_target"]], add_special_tokens=False
@@ -917,9 +923,9 @@ def main(args):
 
         # Freeze all parameters except for the token embeddings in text encoder
         params_to_freeze = itertools.chain(
-            text_encoder.text_model.encoder.parameters(),
-            text_encoder.text_model.final_layer_norm.parameters(),
-            text_encoder.text_model.embeddings.position_embedding.parameters(),
+            text_encoder.encoder.parameters(),
+            # text_encoder.final_layer_norm.parameters(),
+            # text_encoder.embeddings.position_embedding.parameters(),
         )
         freeze_params(params_to_freeze)
         params_to_optimize = itertools.chain(
@@ -930,12 +936,12 @@ def main(args):
             params_to_optimize = itertools.chain(
                 [
                     x[1]
-                    for x in unet.named_parameters()
+                    for x in vae.named_parameters()
                     if ("attn2.to_k" in x[0] or "attn2.to_v" in x[0])
                 ]
             )
         if args.parameter_group == "full-weight":
-            params_to_optimize = itertools.chain(unet.parameters())
+            params_to_optimize = itertools.chain(vae.parameters())
 
     # Optimizer creation
     optimizer = optimizer_class(
@@ -989,8 +995,8 @@ def main(args):
             text_encoder, optimizer, train_dataloader, lr_scheduler
         )
     else:
-        unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            unet, optimizer, train_dataloader, lr_scheduler
+        vae, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            vae, optimizer, train_dataloader, lr_scheduler
         )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1060,7 +1066,7 @@ def main(args):
         if args.parameter_group == "embedding":
             text_encoder.train()
         else:
-            unet.train()
+            vae.train()
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if (
@@ -1073,15 +1079,15 @@ def main(args):
                 continue
 
             with accelerator.accumulate(
-                unet
+                vae
             ) if args.parameter_group != "embedding" else accelerator.accumulate(
                 text_encoder
             ):
                 # Convert images to latent space
-                latents = vae.encode(
+                latents = text_encoder.encode(
                     batch["pixel_values"].to(dtype=weight_dtype)
                 ).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                latents = latents * text_encoder.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
@@ -1106,11 +1112,11 @@ def main(args):
                 ]
 
                 # Predict the noise residual
-                model_pred = unet(
+                model_pred = vae(
                     noisy_latents, timesteps, encoder_hidden_states
                 ).sample
                 with torch.no_grad():
-                    model_pred_anchor = unet(
+                    model_pred_anchor = vae(
                         noisy_latents[: encoder_anchor_hidden_states.size(0)],
                         timesteps[: encoder_anchor_hidden_states.size(0)],
                         encoder_anchor_hidden_states,
@@ -1186,10 +1192,10 @@ def main(args):
                         itertools.chain(text_encoder.parameters())
                         if args.parameter_group == "embedding"
                         else itertools.chain(
-                            [x[1] for x in unet.named_parameters() if ("attn2" in x[0])]
+                            [x[1] for x in vae.named_parameters() if ("attn2" in x[0])]
                         )
                         if args.parameter_group == "cross-attn"
-                        else itertools.chain(unet.parameters())
+                        else itertools.chain(vae.parameters())
                     )
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
                 optimizer.step()
@@ -1205,7 +1211,7 @@ def main(args):
                     if accelerator.is_main_process:
                         pipeline = CustomDiffusionPipeline.from_pretrained(
                             args.pretrained_model_name_or_path,
-                            unet=accelerator.unwrap_model(unet),
+                            vae=accelerator.unwrap_model(vae),
                             text_encoder=accelerator.unwrap_model(text_encoder),
                             tokenizer=tokenizer,
                             revision=args.revision,
@@ -1238,7 +1244,7 @@ def main(args):
                 # create pipeline
                 pipeline = CustomDiffusionPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
-                    unet=accelerator.unwrap_model(unet),
+                    vae=accelerator.unwrap_model(vae),
                     text_encoder=accelerator.unwrap_model(text_encoder),
                     tokenizer=tokenizer,
                     revision=args.revision,
@@ -1258,9 +1264,11 @@ def main(args):
                     pipeline(
                         args.validation_prompt,
                         num_inference_steps=25,
+                        num_frames=8,
+                        guidance_scale=6,
                         generator=generator,
                         eta=1.0,
-                    ).images[0]
+                    ).frames[0][0]
                     for _ in range(args.num_validation_images)
                 ]
 
@@ -1287,10 +1295,10 @@ def main(args):
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        unet = unet.to(torch.float32)
+        vae = vae.to(torch.float32)
         pipeline = CustomDiffusionPipeline.from_pretrained(
             args.pretrained_model_name_or_path,
-            unet=accelerator.unwrap_model(unet),
+            vae=accelerator.unwrap_model(vae),
             text_encoder=accelerator.unwrap_model(text_encoder),
             tokenizer=tokenizer,
             revision=args.revision,
@@ -1315,9 +1323,11 @@ def main(args):
                 pipeline(
                     args.validation_prompt,
                     num_inference_steps=25,
+                    num_frames=8,
+                    guidance_scale=6,
                     generator=generator,
                     eta=1.0,
-                ).images[0]
+                ).frames[0][0]
                 for _ in range(args.num_validation_images)
             ]
 
